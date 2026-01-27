@@ -1,0 +1,78 @@
+# ⬛⬜🛣️ BlackRoad Cross-Repo Sync Workflow
+name: Cross-Repo Sync
+
+on:
+  # Trigger on pushes to main in any BlackRoad repo
+  repository_dispatch:
+    types: [repo-update]
+
+  # Scheduled sync every 6 hours
+  schedule:
+    - cron: '0 */6 * * *'
+
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      full_sync:
+        description: 'Run full sync of all repos'
+        required: false
+        default: 'true'
+        type: boolean
+      repo:
+        description: 'Specific repo to sync (leave empty for all)'
+        required: false
+        type: string
+
+jobs:
+  sync:
+    name: Sync Repositories
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Determine sync scope
+        id: scope
+        run: |
+          if [ "${{ github.event.inputs.repo }}" != "" ]; then
+            echo "repo=${{ github.event.inputs.repo }}" >> $GITHUB_OUTPUT
+            echo "full=false" >> $GITHUB_OUTPUT
+          else
+            echo "repo=" >> $GITHUB_OUTPUT
+            echo "full=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger sync on worker
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL || 'https://youtube-blackroad.workers.dev' }}
+        run: |
+          if [ "${{ steps.scope.outputs.full }}" == "true" ]; then
+            curl -X POST "${WORKER_URL}/api/sync/trigger" \
+              -H "Content-Type: application/json" \
+              -d '{"full": true}'
+          else
+            curl -X POST "${WORKER_URL}/api/repos/${{ steps.scope.outputs.repo }}/scrape" \
+              -H "Content-Type: application/json"
+          fi
+
+      - name: Check cohesion
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL || 'https://youtube-blackroad.workers.dev' }}
+        run: |
+          echo "Analyzing cross-repo cohesion..."
+          curl -s "${WORKER_URL}/api/repos" | jq .
+
+      - name: Report status
+        if: always()
+        run: |
+          echo "Sync completed at $(date)"
+          echo "Event: ${{ github.event_name }}"
