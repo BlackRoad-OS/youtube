@@ -1,0 +1,80 @@
+# ⬛⬜🛣️ BlackRoad Health Check & Self-Healing Workflow
+name: Health Check
+
+on:
+  schedule:
+    # Every 5 minutes
+    - cron: '*/5 * * * *'
+
+  workflow_dispatch:
+    inputs:
+      force_heal:
+        description: 'Force trigger self-healing'
+        required: false
+        default: 'false'
+        type: boolean
+
+jobs:
+  health-check:
+    name: Check System Health
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check worker health
+        id: health
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL || 'https://youtube-blackroad.workers.dev' }}
+        run: |
+          HEALTH=$(curl -s "${WORKER_URL}/api/health" || echo '{"overall":"unknown"}')
+          echo "Health response: ${HEALTH}"
+
+          STATUS=$(echo $HEALTH | jq -r '.overall // "unknown"')
+          echo "status=${STATUS}" >> $GITHUB_OUTPUT
+
+          if [ "$STATUS" == "unhealthy" ]; then
+            echo "::warning::System is unhealthy!"
+            exit 1
+          elif [ "$STATUS" == "degraded" ]; then
+            echo "::warning::System is degraded"
+          else
+            echo "System is healthy"
+          fi
+
+      - name: Trigger self-healing
+        if: failure() || github.event.inputs.force_heal == 'true'
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL || 'https://youtube-blackroad.workers.dev' }}
+        run: |
+          echo "Triggering self-healing..."
+          curl -X POST "${WORKER_URL}/api/heal/trigger" \
+            -H "Content-Type: application/json" \
+            -d '{"action": "retry", "target": "all", "reason": "github-action-health-check"}'
+
+      - name: Check agent status
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL || 'https://youtube-blackroad.workers.dev' }}
+        run: |
+          echo "Agent status:"
+          curl -s "${WORKER_URL}/api/agents" | jq .
+
+      - name: Create issue on persistent failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'health-check-failure'
+            });
+
+            // Only create if no existing issue
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: '🚨 Health Check Failed - Self-Healing Triggered',
+                body: `## Health Check Failure\n\nThe automated health check has detected issues with the system.\n\n**Time**: ${new Date().toISOString()}\n**Workflow Run**: ${context.runId}\n\nSelf-healing has been automatically triggered. Please monitor the situation.\n\n### Actions Taken\n- Retry mechanism activated\n- Agent restart requested\n- Alert sent\n\n### Next Steps\n1. Check the [health endpoint](https://youtube-blackroad.workers.dev/api/health)\n2. Review [self-healer actions](https://youtube-blackroad.workers.dev/api/heal/actions)\n3. Check Cloudflare dashboard for errors`,
+                labels: ['health-check-failure', 'automated']
+              });
+            }

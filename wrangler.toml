@@ -1,0 +1,174 @@
+# ⬛⬜🛣️ BlackRoad YouTube Workers Configuration
+# Cloudflare Workers with Agent Automation & Self-Healing
+
+name = "youtube-blackroad"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Account settings (set via environment or wrangler login)
+# account_id = "your-account-id"
+
+# ============================================
+# Durable Objects - Agent State Management
+# ============================================
+[durable_objects]
+bindings = [
+  { name = "AGENT_COORDINATOR", class_name = "AgentCoordinator" },
+  { name = "REPO_SCRAPER", class_name = "RepoScraperAgent" },
+  { name = "TASK_QUEUE", class_name = "TaskQueueAgent" },
+  { name = "SELF_HEALER", class_name = "SelfHealerAgent" },
+  { name = "SYNC_MANAGER", class_name = "SyncManagerAgent" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["AgentCoordinator", "RepoScraperAgent", "TaskQueueAgent", "SelfHealerAgent", "SyncManagerAgent"]
+
+# ============================================
+# KV Namespaces - Fast Key-Value Storage
+# ============================================
+[[kv_namespaces]]
+binding = "CACHE"
+id = "blackroad-youtube-cache"
+preview_id = "blackroad-youtube-cache-preview"
+
+[[kv_namespaces]]
+binding = "REPO_DATA"
+id = "blackroad-repo-data"
+preview_id = "blackroad-repo-data-preview"
+
+[[kv_namespaces]]
+binding = "AGENT_STATE"
+id = "blackroad-agent-state"
+preview_id = "blackroad-agent-state-preview"
+
+# ============================================
+# D1 Database - Persistent Storage
+# ============================================
+[[d1_databases]]
+binding = "DB"
+database_name = "blackroad-agents"
+database_id = "blackroad-agents-db"
+
+# ============================================
+# R2 Buckets - Object Storage
+# ============================================
+[[r2_buckets]]
+binding = "MEDIA_BUCKET"
+bucket_name = "blackroad-youtube-media"
+
+[[r2_buckets]]
+binding = "ARTIFACTS_BUCKET"
+bucket_name = "blackroad-artifacts"
+
+# ============================================
+# Queues - Background Job Processing
+# ============================================
+[[queues.producers]]
+binding = "TASK_QUEUE_PRODUCER"
+queue = "blackroad-tasks"
+
+[[queues.consumers]]
+queue = "blackroad-tasks"
+max_batch_size = 10
+max_batch_timeout = 30
+max_retries = 5
+dead_letter_queue = "blackroad-tasks-dlq"
+
+[[queues.producers]]
+binding = "SYNC_QUEUE_PRODUCER"
+queue = "blackroad-sync"
+
+[[queues.consumers]]
+queue = "blackroad-sync"
+max_batch_size = 5
+max_batch_timeout = 60
+max_retries = 3
+
+# ============================================
+# Cron Triggers - Scheduled Jobs
+# ============================================
+[triggers]
+crons = [
+  # Every 5 minutes - Health check and self-healing
+  "*/5 * * * *",
+  # Every 15 minutes - Repo sync check
+  "*/15 * * * *",
+  # Every hour - Full agent status report
+  "0 * * * *",
+  # Every 6 hours - Deep repo scrape
+  "0 */6 * * *",
+  # Daily at midnight - Cleanup and optimization
+  "0 0 * * *"
+]
+
+# ============================================
+# Environment Variables
+# ============================================
+[vars]
+ENVIRONMENT = "development"
+LOG_LEVEL = "debug"
+BLACKROAD_ORG = "BlackRoad-OS"
+SELF_HEAL_ENABLED = "true"
+AUTO_SYNC_ENABLED = "true"
+MAX_RETRY_ATTEMPTS = "5"
+RETRY_BACKOFF_MS = "2000"
+
+# Target repos for cross-repo scraping
+TRACKED_REPOS = "blackroad-prism-console,youtube,blackroad-core,blackroad-agents"
+
+# ============================================
+# Staging Environment
+# ============================================
+[env.staging]
+name = "youtube-blackroad-staging"
+vars = { ENVIRONMENT = "staging", LOG_LEVEL = "info" }
+
+[[env.staging.kv_namespaces]]
+binding = "CACHE"
+id = "blackroad-youtube-cache-staging"
+
+[[env.staging.kv_namespaces]]
+binding = "REPO_DATA"
+id = "blackroad-repo-data-staging"
+
+[[env.staging.kv_namespaces]]
+binding = "AGENT_STATE"
+id = "blackroad-agent-state-staging"
+
+# ============================================
+# Production Environment
+# ============================================
+[env.production]
+name = "youtube-blackroad"
+vars = { ENVIRONMENT = "production", LOG_LEVEL = "warn", SELF_HEAL_ENABLED = "true" }
+
+[[env.production.kv_namespaces]]
+binding = "CACHE"
+id = "blackroad-youtube-cache-prod"
+
+[[env.production.kv_namespaces]]
+binding = "REPO_DATA"
+id = "blackroad-repo-data-prod"
+
+[[env.production.kv_namespaces]]
+binding = "AGENT_STATE"
+id = "blackroad-agent-state-prod"
+
+# ============================================
+# Observability
+# ============================================
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+# ============================================
+# Build Configuration
+# ============================================
+[build]
+command = "npm run build"
+watch_dir = "src"
